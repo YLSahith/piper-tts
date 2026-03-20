@@ -1,0 +1,651 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"/>
+<meta name="mobile-web-app-capable" content="yes"/>
+<meta name="apple-mobile-web-app-capable" content="yes"/>
+<title>Piper TTS</title>
+<link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@300;400;500&display=swap" rel="stylesheet"/>
+<script>
+  // Register service worker for SharedArrayBuffer (needed for WASM on GitHub Pages)
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.register('./coi-serviceworker.js').then(() => {
+      // Reload once after SW activates so COOP/COEP headers take effect
+      if (!sessionStorage.getItem('coi-reloaded')) {
+        sessionStorage.setItem('coi-reloaded', '1');
+        location.reload();
+      }
+    });
+  }
+</script>
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+
+:root {
+  --bg: #0a0a0f;
+  --s1: #111118;
+  --s2: #18181f;
+  --s3: #1f1f28;
+  --bd: #26262f;
+  --bd2: #32323e;
+  --a1: #a78bfa;
+  --a2: #7c3aed;
+  --a3: #c4b5fd;
+  --grn: #4ade80;
+  --red: #f87171;
+  --amber: #fbbf24;
+  --txt: #f0eeff;
+  --t2: #8b8ba0;
+  --t3: #44445a;
+  --r: 20px;
+  --glow: rgba(167,139,250,0.2);
+}
+
+html, body { height: 100%; }
+body {
+  font-family: 'Outfit', sans-serif;
+  background: var(--bg); color: var(--txt);
+  min-height: 100dvh; display: flex; flex-direction: column;
+  overflow-x: hidden;
+}
+
+body::before {
+  content: ''; position: fixed; inset: 0; z-index: 0; pointer-events: none;
+  background:
+    radial-gradient(ellipse 80% 60% at 50% -10%, rgba(124,58,237,0.18) 0%, transparent 60%),
+    radial-gradient(ellipse 50% 40% at 0% 100%, rgba(167,139,250,0.08) 0%, transparent 50%),
+    radial-gradient(ellipse 40% 30% at 100% 80%, rgba(196,181,253,0.06) 0%, transparent 50%);
+}
+
+/* ── Header ── */
+header {
+  position: sticky; top: 0; z-index: 30;
+  padding: 18px 20px 14px;
+  background: rgba(10,10,15,0.92); backdrop-filter: blur(20px);
+  border-bottom: 1px solid var(--bd);
+  display: flex; align-items: center; justify-content: space-between;
+}
+
+.brand { display: flex; align-items: center; gap: 12px; }
+
+.brand-logo {
+  width: 40px; height: 40px; border-radius: 14px; position: relative;
+  background: linear-gradient(135deg, var(--a2) 0%, var(--a1) 100%);
+  display: flex; align-items: center; justify-content: center; font-size: 20px;
+  box-shadow: 0 0 28px var(--glow), 0 0 0 1px rgba(167,139,250,0.3);
+  animation: logoPulse 4s ease-in-out infinite;
+}
+@keyframes logoPulse {
+  0%,100% { box-shadow: 0 0 28px var(--glow), 0 0 0 1px rgba(167,139,250,0.3); }
+  50%      { box-shadow: 0 0 42px rgba(167,139,250,0.35), 0 0 0 1px rgba(167,139,250,0.5); }
+}
+
+.brand-text { display: flex; flex-direction: column; }
+.brand-name { font-size: 1.15rem; font-weight: 800; letter-spacing: -0.5px; color: var(--txt); }
+.brand-tag {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.55rem; letter-spacing: 0.15em; text-transform: uppercase; color: var(--t3);
+}
+
+.status-pill {
+  display: flex; align-items: center; gap: 6px;
+  background: var(--s2); border: 1px solid var(--bd);
+  border-radius: 20px; padding: 5px 10px 5px 7px;
+  font-size: 0.7rem; font-weight: 600; color: var(--t2);
+}
+.sp-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--t3); flex-shrink: 0; transition: all .3s; }
+.sp-dot.ready  { background: var(--grn); box-shadow: 0 0 6px var(--grn); }
+.sp-dot.busy   { background: var(--amber); box-shadow: 0 0 6px var(--amber); animation: blink 1s ease-in-out infinite; }
+.sp-dot.error  { background: var(--red); }
+@keyframes blink { 0%,100%{opacity:1} 50%{opacity:.3} }
+.sp-text { max-width: 100px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ── Main ── */
+main {
+  flex: 1; position: relative; z-index: 1;
+  padding: 20px 16px 44px;
+  display: flex; flex-direction: column; gap: 14px;
+  max-width: 560px; width: 100%; margin: 0 auto;
+}
+
+/* ── Section label ── */
+.slbl {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.58rem; letter-spacing: 0.16em; text-transform: uppercase; color: var(--t3);
+  margin-bottom: 10px; display: flex; align-items: center; gap: 8px;
+}
+.slbl::after { content: ''; flex: 1; height: 1px; background: var(--bd); }
+
+/* ── Card ── */
+.card {
+  background: var(--s1); border: 1px solid var(--bd);
+  border-radius: var(--r); padding: 16px; transition: border-color .25s;
+}
+.card:focus-within { border-color: rgba(167,139,250,0.3); }
+
+/* ── Textarea ── */
+textarea {
+  width: 100%; min-height: 125px; background: transparent; border: none; outline: none;
+  color: var(--txt); caret-color: var(--a1);
+  font-family: 'Outfit', sans-serif; font-size: 1rem; line-height: 1.7; resize: vertical;
+}
+textarea::placeholder { color: var(--t3); font-style: italic; }
+.txt-foot { display: flex; justify-content: space-between; align-items: center; margin-top: 8px; }
+.char-c { font-family: 'JetBrains Mono', monospace; font-size: 0.6rem; color: var(--t3); }
+.char-c b { color: var(--t2); }
+.clr-btn { font-size: 0.7rem; color: var(--t3); background: none; border: none; cursor: pointer; transition: color .2s; }
+.clr-btn:hover { color: var(--red); }
+
+/* ── Voice grid ── */
+.voice-scroll {
+  display: flex; flex-direction: column; gap: 8px;
+  max-height: 290px; overflow-y: auto;
+  scrollbar-width: thin; scrollbar-color: var(--bd2) transparent;
+  padding-right: 2px;
+}
+
+.vc {
+  display: flex; align-items: center; gap: 12px;
+  padding: 12px 14px; background: var(--s2); border: 1px solid var(--bd);
+  border-radius: 14px; cursor: pointer; transition: all .2s; user-select: none;
+}
+.vc:hover { border-color: var(--bd2); background: var(--s3); }
+.vc.sel {
+  border-color: rgba(167,139,250,0.5);
+  background: rgba(167,139,250,0.07);
+}
+
+.vc-icon {
+  width: 40px; height: 40px; border-radius: 12px; flex-shrink: 0;
+  background: var(--s3); border: 1px solid var(--bd);
+  display: flex; align-items: center; justify-content: center; font-size: 20px;
+}
+.vc.sel .vc-icon { background: rgba(167,139,250,0.12); border-color: rgba(167,139,250,0.35); }
+
+.vc-info { flex: 1; min-width: 0; }
+.vc-name { font-size: 0.9rem; font-weight: 700; color: var(--txt); }
+.vc-sub  { font-family: 'JetBrains Mono', monospace; font-size: 0.6rem; color: var(--t2); margin-top: 2px; }
+.vc-tags { display: flex; gap: 4px; flex-wrap: wrap; margin-top: 5px; }
+.tag {
+  font-size: 0.57rem; font-weight: 600; padding: 2px 7px; border-radius: 10px; letter-spacing: 0.04em;
+}
+.t-quality { background: rgba(167,139,250,0.12); color: var(--a3); border: 1px solid rgba(167,139,250,0.2); }
+.t-cached  { background: rgba(74,222,128,0.1);   color: #86efac;  border: 1px solid rgba(74,222,128,0.2); }
+.t-lang    { background: rgba(251,191,36,0.1);   color: #fde68a;  border: 1px solid rgba(251,191,36,0.2); }
+
+.vc-radio {
+  width: 20px; height: 20px; border-radius: 50%; flex-shrink: 0;
+  border: 2px solid var(--bd2);
+  display: flex; align-items: center; justify-content: center; font-size: 10px;
+  transition: all .2s;
+}
+.vc.sel .vc-radio { background: var(--a1); border-color: var(--a1); color: #0a0a0f; }
+
+/* ── Download progress per voice ── */
+.dl-progress {
+  margin-top: 6px; height: 3px; background: var(--bd2); border-radius: 3px; overflow: hidden; display: none;
+}
+.dl-progress.show { display: block; }
+.dl-fill {
+  height: 100%; background: linear-gradient(90deg, var(--a2), var(--a1));
+  border-radius: 3px; transition: width .3s ease; width: 0%;
+}
+
+/* ── Speed slider ── */
+.ctrl-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+.ctrl-item label { display: flex; justify-content: space-between; font-size: 0.78rem; color: var(--t2); margin-bottom: 9px; }
+.ctrl-item label .v { font-family: 'JetBrains Mono', monospace; font-size: 0.7rem; color: var(--a1); }
+input[type=range] {
+  -webkit-appearance: none; width: 100%; height: 3px; border-radius: 3px;
+  background: var(--bd2); outline: none; cursor: pointer;
+}
+input[type=range]::-webkit-slider-thumb {
+  -webkit-appearance: none; width: 18px; height: 18px; border-radius: 50%;
+  background: linear-gradient(135deg, var(--a1), var(--a2));
+  box-shadow: 0 0 10px var(--glow); transition: transform .15s;
+}
+input[type=range]:active::-webkit-slider-thumb { transform: scale(1.3); }
+
+/* ── Waveform viz ── */
+.viz { display: flex; align-items: center; justify-content: center; gap: 3px; height: 48px; }
+.vb { flex: 1; max-width: 5px; border-radius: 3px; height: 4px; background: linear-gradient(180deg, var(--a1), var(--a2)); opacity: 0.15; }
+.viz.on .vb { opacity: 1; animation: vb .7s ease-in-out infinite alternate; }
+@keyframes vb { 0%{ height:3px } 100%{ height:36px } }
+.viz.on .vb:nth-child(1) {animation-duration:.52s;animation-delay:.00s}
+.viz.on .vb:nth-child(2) {animation-duration:.45s;animation-delay:.06s}
+.viz.on .vb:nth-child(3) {animation-duration:.61s;animation-delay:.11s}
+.viz.on .vb:nth-child(4) {animation-duration:.40s;animation-delay:.03s}
+.viz.on .vb:nth-child(5) {animation-duration:.68s;animation-delay:.08s}
+.viz.on .vb:nth-child(6) {animation-duration:.50s;animation-delay:.14s}
+.viz.on .vb:nth-child(7) {animation-duration:.38s;animation-delay:.01s}
+.viz.on .vb:nth-child(8) {animation-duration:.63s;animation-delay:.07s}
+.viz.on .vb:nth-child(9) {animation-duration:.55s;animation-delay:.04s}
+.viz.on .vb:nth-child(10){animation-duration:.44s;animation-delay:.10s}
+.viz.on .vb:nth-child(11){animation-duration:.71s;animation-delay:.05s}
+.viz.on .vb:nth-child(12){animation-duration:.48s;animation-delay:.09s}
+.viz.on .vb:nth-child(13){animation-duration:.57s;animation-delay:.02s}
+.viz.on .vb:nth-child(14){animation-duration:.42s;animation-delay:.12s}
+.viz.on .vb:nth-child(15){animation-duration:.65s;animation-delay:.00s}
+.viz.on .vb:nth-child(16){animation-duration:.53s;animation-delay:.06s}
+
+/* ── Status bar ── */
+.sbar { display: flex; align-items: center; justify-content: center; gap: 8px; min-height: 24px; }
+.sdot { width: 6px; height: 6px; border-radius: 50%; background: var(--t3); flex-shrink: 0; transition: all .2s; }
+.sdot.active { background: var(--a1); box-shadow: 0 0 8px var(--a1); animation: blink 1s ease-in-out infinite; }
+.sdot.done   { background: var(--grn); box-shadow: 0 0 8px var(--grn); }
+.sdot.err    { background: var(--red); box-shadow: 0 0 8px var(--red); }
+#stxt { font-family: 'JetBrains Mono', monospace; font-size: 0.68rem; letter-spacing: 0.06em; color: var(--t2); text-align: center; }
+
+/* ── Speak button ── */
+#speak-btn {
+  width: 100%; padding: 18px; border: none; border-radius: var(--r); cursor: pointer;
+  background: linear-gradient(135deg, var(--a2) 0%, var(--a1) 100%);
+  color: #fff; font-family: 'Outfit', sans-serif;
+  font-size: 1rem; font-weight: 800; letter-spacing: 0.06em;
+  display: flex; align-items: center; justify-content: center; gap: 11px;
+  transition: all .2s;
+  box-shadow: 0 4px 28px rgba(124,58,237,0.4), 0 0 0 1px rgba(167,139,250,0.2);
+}
+#speak-btn:hover { transform: translateY(-1px); box-shadow: 0 8px 36px rgba(124,58,237,0.5); }
+#speak-btn:active { transform: scale(0.98); }
+#speak-btn:disabled { opacity: 0.45; cursor: not-allowed; transform: none; box-shadow: none; }
+#speak-btn.loading {
+  background: linear-gradient(135deg, #1a1a2e, #12122a);
+  color: var(--a3); border: 1px solid rgba(167,139,250,0.25); box-shadow: none;
+}
+#speak-btn.stop-mode {
+  background: linear-gradient(135deg, #1a0a0a, #2a0a0a);
+  color: #fca5a5; border: 1px solid rgba(248,113,113,0.3);
+  box-shadow: 0 4px 24px rgba(248,113,113,0.15);
+}
+
+.spin {
+  width: 18px; height: 18px; border-radius: 50%;
+  border: 2.5px solid rgba(167,139,250,0.25); border-top-color: var(--a1);
+  animation: spin .85s linear infinite; display: none;
+}
+@keyframes spin { to{ transform: rotate(360deg) } }
+#speak-btn.loading .spin { display: block; }
+#speak-btn.loading #bico { display: none; }
+
+/* ── Download ── */
+#dl-btn {
+  width: 100%; padding: 13px; background: transparent;
+  border: 1px solid var(--bd2); border-radius: var(--r);
+  color: var(--t2); font-family: 'Outfit', sans-serif; font-size: 0.9rem; font-weight: 600;
+  cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 8px; transition: all .2s;
+}
+#dl-btn:hover:not(:disabled) { border-color: var(--grn); color: var(--grn); }
+#dl-btn:disabled { opacity: 0.28; cursor: not-allowed; }
+
+/* ── Info card ── */
+.info-card {
+  background: rgba(124,58,237,0.05); border: 1px solid rgba(167,139,250,0.12);
+  border-radius: 14px; padding: 13px 15px;
+  font-size: 0.75rem; color: var(--t2); line-height: 1.7;
+}
+.info-card b { color: var(--a3); }
+.info-card code {
+  font-family: 'JetBrains Mono', monospace; font-size: 0.7rem;
+  background: var(--s2); padding: 1px 5px; border-radius: 4px; color: var(--a1);
+}
+
+/* ── Download model banner ── */
+.dl-banner {
+  background: rgba(251,191,36,0.06); border: 1px solid rgba(251,191,36,0.2);
+  border-radius: 14px; padding: 13px 15px; display: none;
+}
+.dl-banner.show { display: block; }
+.dl-banner-title { font-size: 0.82rem; font-weight: 700; color: var(--amber); margin-bottom: 6px; }
+.dl-banner-sub { font-size: 0.73rem; color: var(--t2); line-height: 1.6; margin-bottom: 10px; }
+.dl-bar-bg { height: 6px; background: var(--bd2); border-radius: 6px; overflow: hidden; }
+.dl-bar-fill {
+  height: 100%; background: linear-gradient(90deg, var(--a2), var(--amber));
+  border-radius: 6px; width: 0%; transition: width .3s ease;
+}
+.dl-pct { font-family: 'JetBrains Mono', monospace; font-size: 0.65rem; color: var(--t2); margin-top: 5px; text-align: right; }
+
+::-webkit-scrollbar { width: 3px; }
+::-webkit-scrollbar-thumb { background: var(--bd2); border-radius: 2px; }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="brand">
+    <div class="brand-logo">🔊</div>
+    <div class="brand-text">
+      <div class="brand-name">Piper TTS</div>
+      <div class="brand-tag">On-Device Neural Voice</div>
+    </div>
+  </div>
+  <div class="status-pill">
+    <div class="sp-dot" id="sp-dot"></div>
+    <div class="sp-text" id="sp-text">Initializing…</div>
+  </div>
+</header>
+
+<main>
+
+  <!-- Text Input -->
+  <div>
+    <div class="slbl">Your text</div>
+    <div class="card">
+      <textarea id="txt" placeholder="Type or paste anything to speak…" oninput="onInput()"></textarea>
+      <div class="txt-foot">
+        <div class="char-c"><b id="cc">0</b> chars</div>
+        <button class="clr-btn" onclick="clearTxt()">✕ Clear</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Voice selector -->
+  <div>
+    <div class="slbl">Piper Voice</div>
+    <div class="voice-scroll" id="voice-list"></div>
+  </div>
+
+  <!-- Model download banner -->
+  <div class="dl-banner" id="dl-banner">
+    <div class="dl-banner-title">⬇ Downloading Voice Model…</div>
+    <div class="dl-banner-sub" id="dl-banner-sub">First time only — model saved to your device after download.</div>
+    <div class="dl-bar-bg"><div class="dl-bar-fill" id="dl-fill"></div></div>
+    <div class="dl-pct" id="dl-pct">0%</div>
+  </div>
+
+  <!-- Controls -->
+  <div>
+    <div class="slbl">Controls</div>
+    <div class="card">
+      <div class="ctrl-grid">
+        <div class="ctrl-item">
+          <label>Speed <span class="v" id="speed-v">1.00×</span></label>
+          <input type="range" id="speed" min="0.5" max="2" step="0.05" value="1"
+            oninput="document.getElementById('speed-v').textContent=parseFloat(this.value).toFixed(2)+'×'"/>
+        </div>
+        <div class="ctrl-item">
+          <label>Volume <span class="v" id="vol-v">1.00</span></label>
+          <input type="range" id="vol" min="0" max="1" step="0.05" value="1"
+            oninput="document.getElementById('vol-v').textContent=parseFloat(this.value).toFixed(2)"/>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Waveform -->
+  <div class="viz" id="viz">
+    <div class="vb"></div><div class="vb"></div><div class="vb"></div>
+    <div class="vb"></div><div class="vb"></div><div class="vb"></div>
+    <div class="vb"></div><div class="vb"></div><div class="vb"></div>
+    <div class="vb"></div><div class="vb"></div><div class="vb"></div>
+    <div class="vb"></div><div class="vb"></div><div class="vb"></div>
+    <div class="vb"></div>
+  </div>
+
+  <!-- Status -->
+  <div class="sbar">
+    <div class="sdot" id="sdot"></div>
+    <span id="stxt">SELECT A VOICE AND SPEAK</span>
+  </div>
+
+  <!-- Speak Button -->
+  <button id="speak-btn" onclick="handleSpeak()" disabled>
+    <div class="spin"></div>
+    <span id="bico">▶</span>
+    <span id="blbl">SPEAK</span>
+  </button>
+
+  <!-- Download -->
+  <button id="dl-btn" disabled onclick="downloadAudio()">↓ Download WAV</button>
+
+  <!-- Info -->
+  <div class="info-card">
+    <b>Real Piper TTS</b> running via WebAssembly in your browser.<br/>
+    First use downloads the voice model (~50–150MB). After that it works
+    <b>offline</b> — model is stored on your device. No server needed.
+  </div>
+
+</main>
+
+<script type="module">
+// ── Import vits-web (Piper WASM) from CDN ────────────
+import * as tts from 'https://cdn.jsdelivr.net/npm/@diffusionstudio/vits-web@1/dist/index.js';
+
+// ── Voice catalogue ──────────────────────────────────
+const VOICES = [
+  // English — best quality first
+  { id: 'en_US-hfc_female-medium', name: 'HFC Female',    flag: '🇺🇸', lang: 'English (US)', gender: 'Female', quality: 'Medium' },
+  { id: 'en_US-hfc_male-medium',   name: 'HFC Male',      flag: '🇺🇸', lang: 'English (US)', gender: 'Male',   quality: 'Medium' },
+  { id: 'en_GB-jenny_dioco-medium',name: 'Jenny',         flag: '🇬🇧', lang: 'English (UK)', gender: 'Female', quality: 'Medium' },
+  { id: 'en_GB-alan-medium',       name: 'Alan',          flag: '🇬🇧', lang: 'English (UK)', gender: 'Male',   quality: 'Medium' },
+  { id: 'en_US-amy-medium',        name: 'Amy',           flag: '🇺🇸', lang: 'English (US)', gender: 'Female', quality: 'Medium' },
+  { id: 'en_US-joe-medium',        name: 'Joe',           flag: '🇺🇸', lang: 'English (US)', gender: 'Male',   quality: 'Medium' },
+  { id: 'en_US-ryan-medium',       name: 'Ryan',          flag: '🇺🇸', lang: 'English (US)', gender: 'Male',   quality: 'Medium' },
+  { id: 'en_US-kusal-medium',      name: 'Kusal',         flag: '🇺🇸', lang: 'English (US)', gender: 'Male',   quality: 'Medium' },
+  { id: 'en_US-lessac-medium',     name: 'Lessac',        flag: '🇺🇸', lang: 'English (US)', gender: 'Female', quality: 'Medium' },
+  { id: 'en_US-lessac-high',       name: 'Lessac HD',     flag: '🇺🇸', lang: 'English (US)', gender: 'Female', quality: 'High' },
+  { id: 'en_US-ryan-high',         name: 'Ryan HD',       flag: '🇺🇸', lang: 'English (US)', gender: 'Male',   quality: 'High' },
+  // Hindi / Indian English
+  { id: 'hi_IN-dhruva-medium',     name: 'Dhruva',        flag: '🇮🇳', lang: 'Hindi',        gender: 'Male',   quality: 'Medium' },
+  // German
+  { id: 'de_DE-thorsten-medium',   name: 'Thorsten',      flag: '🇩🇪', lang: 'German',       gender: 'Male',   quality: 'Medium' },
+  // French
+  { id: 'fr_FR-siwis-medium',      name: 'Siwis',         flag: '🇫🇷', lang: 'French',       gender: 'Female', quality: 'Medium' },
+  // Spanish
+  { id: 'es_ES-carlfm-x_low',      name: 'Carlfm',        flag: '🇪🇸', lang: 'Spanish',      gender: 'Male',   quality: 'Low' },
+  // Portuguese
+  { id: 'pt_BR-faber-medium',      name: 'Faber',         flag: '🇧🇷', lang: 'Portuguese',   gender: 'Male',   quality: 'Medium' },
+];
+
+// Track which voices are cached locally
+const cachedVoices = new Set(JSON.parse(localStorage.getItem('piper_cached') || '[]'));
+
+let selectedVoice = localStorage.getItem('piper_voice') || 'en_US-hfc_female-medium';
+let lastBlob = null;
+let currentAudio = null;
+let isBusy = false;
+
+// ── Build voice list ─────────────────────────────────
+function buildVoiceList() {
+  const list = document.getElementById('voice-list');
+  list.innerHTML = '';
+  VOICES.forEach(v => {
+    const isSel = v.id === selectedVoice;
+    const isCached = cachedVoices.has(v.id);
+    const card = document.createElement('div');
+    card.className = 'vc' + (isSel ? ' sel' : '');
+    card.dataset.id = v.id;
+    card.onclick = () => selectVoice(v.id);
+
+    const qualClass = v.quality === 'High' ? 't-quality' : v.quality === 'Medium' ? 't-quality' : 't-lang';
+    card.innerHTML = `
+      <div class="vc-icon">${v.flag}</div>
+      <div class="vc-info">
+        <div class="vc-name">${v.name}</div>
+        <div class="vc-sub">${v.lang} · ${v.gender}</div>
+        <div class="vc-tags">
+          <span class="tag ${qualClass}">${v.quality}</span>
+          ${isCached ? '<span class="tag t-cached">📱 Cached</span>' : ''}
+        </div>
+        <div class="dl-progress${isSel ? '' : ''}" id="prog-${v.id.replace(/[^a-z0-9]/gi,'_')}">
+          <div class="dl-fill"></div>
+        </div>
+      </div>
+      <div class="vc-radio">${isSel ? '✓' : ''}</div>
+    `;
+    list.appendChild(card);
+  });
+}
+
+function selectVoice(id) {
+  selectedVoice = id;
+  localStorage.setItem('piper_voice', id);
+  document.querySelectorAll('.vc').forEach(c => {
+    const s = c.dataset.id === id;
+    c.classList.toggle('sel', s);
+    c.querySelector('.vc-radio').textContent = s ? '✓' : '';
+  });
+  setStatus(`Voice: ${VOICES.find(v=>v.id===id)?.name || id}`, '');
+}
+
+// ── Input helpers ────────────────────────────────────
+function onInput() {
+  document.getElementById('cc').textContent = document.getElementById('txt').value.length;
+}
+function clearTxt() {
+  document.getElementById('txt').value = '';
+  document.getElementById('cc').textContent = '0';
+}
+
+// ── Speak / Stop ─────────────────────────────────────
+async function handleSpeak() {
+  if (currentAudio && !currentAudio.paused) { stopAudio(); return; }
+  if (isBusy) return;
+
+  const text = document.getElementById('txt').value.trim();
+  if (!text) { setStatus('Type something first!', 'err'); return; }
+
+  isBusy = true;
+  setBtn('loading');
+  setHdrStatus('busy', 'Generating…');
+
+  const isCached = cachedVoices.has(selectedVoice);
+
+  // Show download banner for first-time model download
+  if (!isCached) {
+    document.getElementById('dl-banner').classList.add('show');
+    document.getElementById('dl-banner-sub').textContent =
+      `Downloading ${VOICES.find(v=>v.id===selectedVoice)?.name} voice model (first time only, ~50–150MB)…`;
+    setStatus('DOWNLOADING VOICE MODEL…', 'active');
+  } else {
+    setStatus('GENERATING SPEECH…', 'active');
+  }
+
+  try {
+    const wav = await tts.predict(
+      { text, voiceId: selectedVoice },
+      // Progress callback
+      (progress) => {
+        const pct = progress.total > 0 ? Math.round(progress.loaded / progress.total * 100) : 0;
+        document.getElementById('dl-fill').style.width = pct + '%';
+        document.getElementById('dl-pct').textContent = pct + '%';
+        document.getElementById('dl-banner-sub').textContent =
+          `Downloading: ${pct}% — ${(progress.loaded/1024/1024).toFixed(1)}MB / ${(progress.total/1024/1024).toFixed(1)}MB`;
+      }
+    );
+
+    // Model now cached
+    if (!cachedVoices.has(selectedVoice)) {
+      cachedVoices.add(selectedVoice);
+      localStorage.setItem('piper_cached', JSON.stringify([...cachedVoices]));
+      buildVoiceList(); // refresh to show cached badge
+    }
+
+    document.getElementById('dl-banner').classList.remove('show');
+
+    // Play
+    lastBlob = wav;
+    document.getElementById('dl-btn').disabled = false;
+
+    const speed = parseFloat(document.getElementById('speed').value);
+    const vol   = parseFloat(document.getElementById('vol').value);
+    const url   = URL.createObjectURL(wav);
+    const audio = new Audio(url);
+    audio.playbackRate = speed;
+    audio.volume = vol;
+    currentAudio = audio;
+    isBusy = false;
+
+    audio.onplay = () => {
+      setBtn('stop');
+      setStatus('PLAYING · ' + (VOICES.find(v=>v.id===selectedVoice)?.name||selectedVoice), 'active');
+      document.getElementById('viz').classList.add('on');
+      setHdrStatus('busy', 'Playing');
+    };
+    audio.onended = () => {
+      setBtn('idle'); setStatus('DONE ✓', 'done');
+      document.getElementById('viz').classList.remove('on');
+      setHdrStatus('ready', 'Ready');
+      currentAudio = null;
+    };
+    audio.onerror = () => {
+      setBtn('idle'); setStatus('Playback error', 'err');
+      document.getElementById('viz').classList.remove('on');
+      setHdrStatus('ready', 'Ready');
+      currentAudio = null;
+    };
+
+    await audio.play();
+
+  } catch(err) {
+    isBusy = false;
+    document.getElementById('dl-banner').classList.remove('show');
+    setBtn('idle');
+    setHdrStatus('error', 'Error');
+    const msg = err?.message || String(err);
+    setStatus('Error: ' + msg.slice(0, 80), 'err');
+    document.getElementById('viz').classList.remove('on');
+    console.error(err);
+  }
+}
+
+function stopAudio() {
+  if (currentAudio) { currentAudio.pause(); currentAudio = null; }
+  isBusy = false;
+  setBtn('idle');
+  setStatus('STOPPED', '');
+  document.getElementById('viz').classList.remove('on');
+  setHdrStatus('ready', 'Ready');
+}
+
+function downloadAudio() {
+  if (!lastBlob) return;
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(lastBlob);
+  a.download = `piper_${selectedVoice}_${Date.now()}.wav`;
+  a.click();
+}
+
+// ── UI helpers ────────────────────────────────────────
+function setBtn(mode) {
+  const btn = document.getElementById('speak-btn');
+  const ico = document.getElementById('bico');
+  const lbl = document.getElementById('blbl');
+  btn.className = '';
+  btn.disabled = false;
+  if (mode === 'loading')    { btn.classList.add('loading');   lbl.textContent = 'GENERATING…'; }
+  else if (mode === 'stop')  { btn.classList.add('stop-mode'); ico.textContent = '■'; lbl.textContent = 'STOP'; }
+  else                       { ico.textContent = '▶'; lbl.textContent = 'SPEAK'; }
+}
+
+function setStatus(msg, type) {
+  document.getElementById('stxt').textContent = msg;
+  document.getElementById('sdot').className = 'sdot' + (type ? ' '+type : '');
+}
+
+function setHdrStatus(state, label) {
+  document.getElementById('sp-dot').className = 'sp-dot ' + (state === 'busy' ? 'busy' : state === 'error' ? 'error' : 'ready');
+  document.getElementById('sp-text').textContent = label;
+}
+
+// ── Init ─────────────────────────────────────────────
+buildVoiceList();
+document.getElementById('speak-btn').disabled = false;
+setHdrStatus('ready', 'Ready');
+setStatus('SELECT A VOICE BELOW AND SPEAK', '');
+
+// Scroll selected into view
+setTimeout(() => {
+  document.querySelector('.vc.sel')?.scrollIntoView({ block: 'nearest' });
+}, 150);
+
+// Expose to global for onclick handlers
+window.handleSpeak = handleSpeak;
+window.clearTxt = clearTxt;
+window.onInput = onInput;
+window.downloadAudio = downloadAudio;
+window.selectVoice = selectVoice;
+</script>
+</body>
+</html>
